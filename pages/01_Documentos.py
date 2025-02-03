@@ -101,9 +101,11 @@ def main():
             if archivos:
                 for archivo in archivos:
                     with st.expander(f"📄 {archivo.name}", expanded=True):
+                        # Obtener el nombre base del archivo sin extensión
+                        nombre_base = os.path.splitext(archivo.name)[0]
                         titulo = st.text_input(
                             "Título del documento", 
-                            value=archivo.name.replace('.pdf', ''),
+                            value=nombre_base,
                             key=f"titulo_{archivo.name}"
                         )
                 
