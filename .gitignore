@@ -1,6 +1,5 @@
 .venv
 .streamlit
 __pycache__
-databases
 chat_history.db
 documents
