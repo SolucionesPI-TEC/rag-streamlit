@@ -125,9 +125,16 @@ def main():
                         k: v for k, v in content['metrics'].items() 
                         if k != 'preparación'
                     }
+                    
+                    # Mover el tipo al final
+                    tipo = filtered_metrics.pop('tipo', '')
                     metrics_text = " | ".join([
                         f"{k}: {v}" for k, v in filtered_metrics.items()
                     ])
+                    
+                    if tipo:
+                        metrics_text += f" | {tipo}"
+                    
                     st.markdown(
                         f"<div style='text-align: right; color: #666; font-size: 0.8em'>{metrics_text}</div>", 
                         unsafe_allow_html=True
@@ -171,9 +178,16 @@ def main():
                         k: v for k, v in result['metrics'].items() 
                         if k != 'preparación'
                     }
+                    
+                    # Mover el tipo al final
+                    tipo = filtered_metrics.pop('tipo', '')
                     metrics_text = " | ".join([
                         f"{k}: {v}" for k, v in filtered_metrics.items()
                     ])
+                    
+                    if tipo:
+                        metrics_text += f" | {tipo}"
+                    
                     st.markdown(
                         f"<div style='text-align: right; color: #666; font-size: 0.8em'>{metrics_text}</div>", 
                         unsafe_allow_html=True

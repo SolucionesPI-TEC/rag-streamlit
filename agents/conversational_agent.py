@@ -89,14 +89,30 @@ class ConversationalAgent:
             return ""
 
     def get_conversation_context(self) -> str:
-        """Obtiene el contexto de las últimas interacciones"""
+        """Obtiene el contexto detallado de las últimas interacciones"""
         if not self.conversation_memory:
             return ""
+        
+        # Obtener los últimos mensajes de la base de datos
+        messages = db.get_messages(self.current_conversation_id)
+        recent_messages = messages[-6:]  # Obtener las últimas 3 preguntas y 3 respuestas
+        
+        context = "Últimas interacciones:\n"
+        for msg in recent_messages:
+            role = "Usuario" if msg["role"] == "user" else "Asistente"
+            content = msg["content"]
+            if isinstance(content, str):
+                try:
+                    content = json.loads(content)
+                except json.JSONDecodeError:
+                    pass
             
-        return "\n".join([
-            f"Interacción previa: {memory}" 
-            for memory in self.conversation_memory[-3:]  # Mantener solo las últimas 3 interacciones
-        ])
+            if isinstance(content, dict):
+                content = content.get("response", "")
+            
+            context += f"{role}: {content}\n"
+        
+        return context
 
     def is_document_query(self, query: str) -> bool:
         """Determina si la consulta requiere búsqueda en documentos"""
@@ -191,7 +207,10 @@ class ConversationalAgent:
             
             return {
                 'response': full_response,
-                'metrics': {'total': f"{(perf_counter() - start_total):.1f}s"}
+                'metrics': {
+                    'total': f"{(perf_counter() - start_total):.1f}s",
+                    'tipo': 'Respuesta Personal'
+                }
             }
             
         except Exception as e:
@@ -235,12 +254,118 @@ class ConversationalAgent:
         except Exception as e:
             logger.error(f"Error actualizando memoria personal: {str(e)}")
 
+    def is_creative_query(self, query: str) -> bool:
+        """Determina si la consulta requiere creatividad o razonamiento"""
+        try:
+            prompt = """Determina si esta consulta requiere una respuesta creativa o de razonamiento 
+            en lugar de búsqueda en documentos. Responde solo con 'SI' o 'NO'.
+            
+            Ejemplos de consultas creativas/razonamiento:
+            - "¿Qué piensas sobre...?"
+            - "¿Podrías crear una historia con...?"
+            - "¿Cómo resolverías...?"
+            - "Imagina que..."
+            
+            Consulta: {query}
+            """
+            
+            completion = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "Determina si una consulta requiere creatividad"},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0,
+                max_tokens=10
+            )
+            
+            return completion.choices[0].message.content.strip().upper() == "SI"
+            
+        except Exception as e:
+            logger.error(f"Error determinando tipo de consulta creativa: {str(e)}")
+            return False
+
+    def process_creative_query(self, query: str) -> Dict[str, Any]:
+        """Procesa consultas que requieren creatividad o razonamiento"""
+        start_total = perf_counter()
+        
+        try:
+            conversation_context = self.get_conversation_context()
+            personal_context = "\n".join([f"{k}: {v}" for k, v in self.personal_memory.items()])
+            
+            prompt = f"""Responde a la consulta del usuario de manera creativa y razonada.
+            
+            MEMORIA PERSONAL:
+            {personal_context}
+            
+            CONTEXTO DE CONVERSACIÓN PREVIA:
+            {conversation_context}
+            
+            CONSULTA DEL USUARIO:
+            {query}
+            
+            INSTRUCCIONES:
+            1. Usa el contexto de las conversaciones anteriores como base para tu respuesta
+            2. Sé creativo y original en tu respuesta
+            3. Mantén coherencia con la información previa
+            4. Puedes especular y razonar más allá de los hechos concretos
+            5. Si usas información de conversaciones previas, referenciarla
+            """
+            
+            # Iniciar respuesta en streaming
+            placeholder = st.empty()
+            full_response = ""
+            
+            stream = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "Eres un asistente creativo y razonador"},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.8,  # Mayor temperatura para más creatividad
+                stream=True
+            )
+            
+            for chunk in stream:
+                if chunk.choices[0].delta.content is not None:
+                    full_response += chunk.choices[0].delta.content
+                    placeholder.markdown(full_response + "▌")
+            
+            placeholder.empty()
+            
+            # Actualizar memorias
+            interaction_summary = self.generate_interaction_summary(query, full_response)
+            if interaction_summary:
+                self.conversation_memory.append(interaction_summary)
+                if len(self.conversation_memory) > 5:
+                    self.conversation_memory.pop(0)
+            
+            self.save_memories()
+            
+            return {
+                'response': full_response,
+                'metrics': {
+                    'total': f"{(perf_counter() - start_total):.1f}s",
+                    'tipo': 'Respuesta Creativa'
+                }
+            }
+            
+        except Exception as e:
+            return {
+                'response': f"Lo siento, ocurrió un error: {str(e)}",
+                'metrics': {'total': f"{(perf_counter() - start_total):.1f}s"}
+            }
+
     def process_user_query(self, query: str) -> Dict[str, Any]:
-        # Determinar si la consulta requiere búsqueda documental
+        # Primero verificar si es una consulta creativa
+        if self.is_creative_query(query):
+            return self.process_creative_query(query)
+        
+        # Luego verificar si es una consulta personal
         if not self.is_document_query(query):
             return self.process_personal_query(query)
         
-        # El resto del código existente para búsqueda documental...
+        # Si no es ninguna de las anteriores, procesar como consulta documental
         metrics = {}
         start_total = perf_counter()
         
@@ -263,6 +388,7 @@ class ConversationalAgent:
         # Verificar si no hay resultados
         if len(contexts) == 1 and contexts[0]['doc_id'] == '0':
             metrics['total'] = f"{(perf_counter() - start_total):.1f}s"
+            metrics['tipo'] = 'Respuesta Documental'
             return {
                 'response': "Lo siento, no encontré información relevante en los documentos disponibles para responder tu consulta. ¿Podrías reformular tu pregunta o intentar con otra consulta?",
                 'references': [],
@@ -346,6 +472,7 @@ class ConversationalAgent:
             
             metrics['generación'] = f"{(perf_counter() - start_llm):.1f}s"
             metrics['total'] = f"{(perf_counter() - start_total):.1f}s"
+            metrics['tipo'] = 'Respuesta Documental'
             
             return {
                 'response': full_response,
