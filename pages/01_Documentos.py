@@ -4,6 +4,8 @@ import io
 from datetime import datetime
 import document_db_manager as db
 from agents.semantic_db_agent import SemanticDBAgent
+from docx import Document
+import os
 
 def extract_text_from_pdf(pdf_file):
     pdf_reader = PyPDF2.PdfReader(pdf_file)
@@ -11,6 +13,28 @@ def extract_text_from_pdf(pdf_file):
     for page in pdf_reader.pages:
         text += page.extract_text() + "\n"
     return text
+
+def extract_text_from_docx(docx_file):
+    doc = Document(docx_file)
+    text = ""
+    for paragraph in doc.paragraphs:
+        text += paragraph.text + "\n"
+    return text
+
+def extract_text_from_txt(txt_file):
+    return txt_file.getvalue().decode('utf-8')
+
+def extract_text(file):
+    file_extension = file.name.split('.')[-1].lower()
+    
+    if file_extension == 'pdf':
+        return extract_text_from_pdf(file)
+    elif file_extension == 'docx':
+        return extract_text_from_docx(file)
+    elif file_extension == 'txt':
+        return extract_text_from_txt(file)
+    else:
+        raise ValueError(f"Formato de archivo no soportado: {file_extension}")
 
 def main():
     # Inicializar el agente semántico
@@ -69,7 +93,11 @@ def main():
                 format_func=lambda x: x['name']
             )
             
-            archivos = st.file_uploader("Selecciona archivos PDF", type=['pdf'], accept_multiple_files=True)
+            archivos = st.file_uploader(
+                "Selecciona archivos PDF, DOCX o TXT", 
+                type=['pdf', 'docx', 'txt'], 
+                accept_multiple_files=True
+            )
             if archivos:
                 for archivo in archivos:
                     with st.expander(f"📄 {archivo.name}", expanded=True):
@@ -82,19 +110,28 @@ def main():
                 if st.button("Procesar documentos", type="primary"):
                     for archivo in archivos:
                         with st.spinner(f"Procesando {archivo.name}..."):
-                            texto = extract_text_from_pdf(archivo)
-                            descripcion = semantic_agent.generate_description(texto)
-                            
-                            titulo = st.session_state[f"titulo_{archivo.name}"]
-                            
-                            db.save_document(
-                                db_name=bd_seleccionada['name'],
-                                title=titulo,
-                                content=texto,
-                                semantic_description=descripcion
-                            )
-                            
-                            st.success(f"¡Documento {archivo.name} procesado con éxito!")
+                            try:
+                                # Guardar el archivo físicamente
+                                file_path = db.save_file(bd_seleccionada['name'], archivo)
+                                
+                                # Extraer el texto
+                                texto = extract_text(archivo)
+                                descripcion = semantic_agent.generate_description(texto)
+                                
+                                titulo = st.session_state[f"titulo_{archivo.name}"]
+                                
+                                # Guardar la información en la base de datos
+                                db.save_document(
+                                    db_name=bd_seleccionada['name'],
+                                    title=titulo,
+                                    content=texto,
+                                    semantic_description=descripcion,
+                                    filename=archivo.name  # Agregar el nombre del archivo
+                                )
+                                
+                                st.success(f"¡Documento {archivo.name} procesado con éxito!")
+                            except Exception as e:
+                                st.error(f"Error al procesar {archivo.name}: {str(e)}")
                     
                     st.rerun()
     
@@ -161,7 +198,7 @@ def main():
                     
                     # Acciones
                     st.write("### 🛠️ Acciones")
-                    col1, col2, col3 = st.columns([1,1,2])
+                    col1, col2, col3, col4 = st.columns([1,1,1,1])
                     with col1:
                         if st.button("🗑️ Eliminar", key=f"del_doc_{unique_key}"):
                             db.delete_document(doc['database_name'], doc['id'])
@@ -192,6 +229,17 @@ def main():
                                 document.execCommand("copy");
                             </script>
                             """, unsafe_allow_html=True)
+                    with col4:
+                        if doc.get('filename'):
+                            file_path = os.path.join(db.get_documents_folder(doc['database_name']), doc['filename'])
+                            if os.path.exists(file_path):
+                                with open(file_path, 'rb') as f:
+                                    st.download_button(
+                                        "⬇️ Descargar archivo",
+                                        f,
+                                        file_name=doc['filename'],
+                                        key=f"download_{unique_key}"
+                                    )
 
 if __name__ == "__main__":
     main() 

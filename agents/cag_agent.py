@@ -52,7 +52,6 @@ class CAGAgent:
         
         # Seleccionar documentos relevantes
         selected_docs = self._select_best_documents(query, descriptions)
-        logger.json_data('cag', selected_docs)
         
         # Preparar respuestas
         responses = []
@@ -66,6 +65,7 @@ class CAGAgent:
                     'metadata': doc_info['metadata']
                 })
         
+        # Solo registrar el resultado final
         logger.json_data('cag', responses)
         return responses
     
@@ -73,7 +73,7 @@ class CAGAgent:
         """
         Usa el LLM para seleccionar los mejores documentos evaluando todas las descripciones
         """
-        prompt = f"""Actúa como un experto en recuperación de información que debe seleccionar los documentos más relevantes para una consulta.
+        prompt = f"""Actúa como un experto en recuperación de información que debe rankear y seleccionar los documentos más relevantes.
 
         CONSULTA DEL USUARIO:
         "{query}"
@@ -82,25 +82,28 @@ class CAGAgent:
         {self._format_descriptions(descriptions)}
 
         TAREA:
-        Selecciona entre 1 y 3 documentos que mejor respondan a la consulta del usuario.
+        Selecciona y rankea los 3 documentos más relevantes para la consulta del usuario.
         
-        CRITERIOS DE SELECCIÓN:
-        - Relevancia directa con la consulta
-        - Especificidad de la información
-        - Completitud de la respuesta
-        - Priorizar documentos que contengan la información exacta solicitada
+        CRITERIOS DE SELECCIÓN Y RANKING:
+        1. Relevancia directa con la consulta
+        2. Especificidad de la información
+        3. Completitud de la respuesta
+        4. Prioriza documentos que contengan información complementaria
 
         INSTRUCCIONES ESPECÍFICAS:
-        1. Selecciona MÁXIMO 3 documentos más relevantes
-        2. Si un documento contiene toda la información necesaria, selecciona solo ese
-        3. Asigna scores de relevancia:
-           - 0.9-1.0: Respuesta directa y completa
-           - 0.7-0.8: Información muy relevante
+        1. DEBES seleccionar SIEMPRE hasta 3 documentos, incluso si algunos son menos relevantes
+        2. Asigna scores de relevancia:
+           - 0.9-1.0: Respuesta directa y muy relevante
+           - 0.7-0.8: Información relevante
            - 0.5-0.6: Información parcialmente relevante
+           - 0.3-0.4: Información tangencialmente relevante
+        3. Ordena los documentos por score de mayor a menor
 
         DEBES RESPONDER EXACTAMENTE EN ESTE FORMATO JSON:
         [
-            {{"doc_id": "1", "score": 0.9}}
+            {{"doc_id": "1", "score": 0.9}},
+            {{"doc_id": "2", "score": 0.7}},
+            {{"doc_id": "3", "score": 0.4}}
         ]
 
         NO INCLUYAS NADA MÁS EN TU RESPUESTA, SOLO EL JSON.
@@ -112,7 +115,7 @@ class CAGAgent:
                 messages=[
                     {
                         "role": "system", 
-                        "content": "Eres un sistema experto en selección de documentos. RESPONDE ÚNICAMENTE CON UN ARRAY JSON que contenga entre 1 y 3 objetos con los campos 'doc_id' (string) y 'score' (número)."
+                        "content": "Eres un sistema experto en selección y ranking de documentos. DEBES seleccionar SIEMPRE hasta 3 documentos ordenados por relevancia."
                     },
                     {"role": "user", "content": prompt}
                 ],
@@ -165,11 +168,15 @@ class CAGAgent:
                 
                 # Si tenemos resultados procesados, los devolvemos
                 if processed_results:
-                    # Solo devolver un documento si tiene score muy alto (>0.9) y los demás son mucho más bajos
+                    # Modificar la lógica de selección de un solo documento
                     if len(processed_results) > 1:
                         best_score = processed_results[0]['score']
                         second_score = processed_results[1]['score']
-                        if best_score > 0.9 and (best_score - second_score) > 0.3:
+                        # Solo reducir a un documento si el score es muy alto Y la diferencia es significativa
+                        # Y la consulta no es sobre listar o mostrar documentos
+                        if (best_score > 0.9 and 
+                            (best_score - second_score) > 0.3 and 
+                            not any(word in query.lower() for word in ['listar', 'mostrar', 'documentos', 'todos'])):
                             processed_results = [processed_results[0]]
                     
                     logger.json_data('cag', processed_results)
@@ -210,22 +217,23 @@ class CAGAgent:
             
             total_relevance = (content_matches * 0.15) + (semantic_matches * 0.1) + phrase_bonus
             
-            if total_relevance > 0:
-                best_docs.append({
-                    'doc_id': doc_id,
-                    'score': min(0.5 + total_relevance, 1.0)
-                })
+            # Siempre agregar el documento con un score mínimo de 0.3
+            best_docs.append({
+                'doc_id': doc_id,
+                'score': max(0.3, min(0.5 + total_relevance, 1.0))
+            })
         
-        # Si no se encontraron documentos relevantes
-        if not best_docs:
-            return [{
-                'doc_id': '0',
-                'score': 0,
-                'content': "Lo siento, no encontré documentos relevantes para responder tu consulta.",
-                'metadata': {'title': 'Sin resultados'}
-            }]
-            
-        # Ordenar por relevancia y tomar hasta 3 mejores
+        # Si no hay suficientes documentos, agregar documentos con score bajo
+        while len(best_docs) < 3 and descriptions:
+            remaining_docs = [doc_id for doc_id in descriptions.keys() if doc_id not in [d['doc_id'] for d in best_docs]]
+            if not remaining_docs:
+                break
+            best_docs.append({
+                'doc_id': remaining_docs[0],
+                'score': 0.3
+            })
+        
+        # Ordenar por relevancia y tomar exactamente 3 (o todos si hay menos)
         best_docs.sort(key=lambda x: x['score'], reverse=True)
         return best_docs[:3]
     

@@ -254,118 +254,12 @@ class ConversationalAgent:
         except Exception as e:
             logger.error(f"Error actualizando memoria personal: {str(e)}")
 
-    def is_creative_query(self, query: str) -> bool:
-        """Determina si la consulta requiere creatividad o razonamiento"""
-        try:
-            prompt = """Determina si esta consulta requiere una respuesta creativa o de razonamiento 
-            en lugar de búsqueda en documentos. Responde solo con 'SI' o 'NO'.
-            
-            Ejemplos de consultas creativas/razonamiento:
-            - "¿Qué piensas sobre...?"
-            - "¿Podrías crear una historia con...?"
-            - "¿Cómo resolverías...?"
-            - "Imagina que..."
-            
-            Consulta: {query}
-            """
-            
-            completion = self.client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": "Determina si una consulta requiere creatividad"},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0,
-                max_tokens=10
-            )
-            
-            return completion.choices[0].message.content.strip().upper() == "SI"
-            
-        except Exception as e:
-            logger.error(f"Error determinando tipo de consulta creativa: {str(e)}")
-            return False
-
-    def process_creative_query(self, query: str) -> Dict[str, Any]:
-        """Procesa consultas que requieren creatividad o razonamiento"""
-        start_total = perf_counter()
-        
-        try:
-            conversation_context = self.get_conversation_context()
-            personal_context = "\n".join([f"{k}: {v}" for k, v in self.personal_memory.items()])
-            
-            prompt = f"""Responde a la consulta del usuario de manera creativa y razonada.
-            
-            MEMORIA PERSONAL:
-            {personal_context}
-            
-            CONTEXTO DE CONVERSACIÓN PREVIA:
-            {conversation_context}
-            
-            CONSULTA DEL USUARIO:
-            {query}
-            
-            INSTRUCCIONES:
-            1. Usa el contexto de las conversaciones anteriores como base para tu respuesta
-            2. Sé creativo y original en tu respuesta
-            3. Mantén coherencia con la información previa
-            4. Puedes especular y razonar más allá de los hechos concretos
-            5. Si usas información de conversaciones previas, referenciarla
-            """
-            
-            # Iniciar respuesta en streaming
-            placeholder = st.empty()
-            full_response = ""
-            
-            stream = self.client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": "Eres un asistente creativo y razonador"},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.8,  # Mayor temperatura para más creatividad
-                stream=True
-            )
-            
-            for chunk in stream:
-                if chunk.choices[0].delta.content is not None:
-                    full_response += chunk.choices[0].delta.content
-                    placeholder.markdown(full_response + "▌")
-            
-            placeholder.empty()
-            
-            # Actualizar memorias
-            interaction_summary = self.generate_interaction_summary(query, full_response)
-            if interaction_summary:
-                self.conversation_memory.append(interaction_summary)
-                if len(self.conversation_memory) > 5:
-                    self.conversation_memory.pop(0)
-            
-            self.save_memories()
-            
-            return {
-                'response': full_response,
-                'metrics': {
-                    'total': f"{(perf_counter() - start_total):.1f}s",
-                    'tipo': 'Respuesta Creativa'
-                }
-            }
-            
-        except Exception as e:
-            return {
-                'response': f"Lo siento, ocurrió un error: {str(e)}",
-                'metrics': {'total': f"{(perf_counter() - start_total):.1f}s"}
-            }
-
     def process_user_query(self, query: str) -> Dict[str, Any]:
-        # Primero verificar si es una consulta creativa
-        if self.is_creative_query(query):
-            return self.process_creative_query(query)
-        
-        # Luego verificar si es una consulta personal
+        # Verificar si es una consulta personal
         if not self.is_document_query(query):
             return self.process_personal_query(query)
         
-        # Si no es ninguna de las anteriores, procesar como consulta documental
+        # Si no es personal, procesar como consulta documental
         metrics = {}
         start_total = perf_counter()
         
@@ -398,11 +292,11 @@ class ConversationalAgent:
         # Preparar el contexto combinado con referencias
         start_prep = perf_counter()
         combined_context = ""
-        references = []
+        references_map = {}
         for i, ctx in enumerate(contexts, 1):
             title = ctx['metadata'].get('title', 'Sin título')
-            references.append(f"[{i}] {title}")
-            combined_context += f"\nDocumento [{i}] - {title}:\n"
+            references_map[str(i)] = title
+            combined_context += f"\nDocumento {i}:\n"
             combined_context += f"{ctx['content']}\n"
         metrics['preparación'] = f"{(perf_counter() - start_prep):.1f}s"
         
@@ -417,9 +311,10 @@ class ConversationalAgent:
         INSTRUCCIONES:
         1. Analiza cuidadosamente los documentos proporcionados
         2. Responde la consulta del usuario de manera clara y detallada
-        3. Incluye referencias a los documentos usando el formato [1], [2], etc.
+        3. Usa solo [n] para referenciar documentos, sin la palabra "documento"
         4. Si la información no está en los documentos, indícalo claramente
         5. Cita el documento relevante cada vez que menciones información específica
+        6. Solo usa las referencias que sean relevantes para la respuesta
         """
         
         try:
@@ -459,6 +354,12 @@ class ConversationalAgent:
             # Limpiar el placeholder al finalizar
             placeholder.empty()
             
+            # Después de obtener full_response, analizar qué referencias fueron usadas
+            used_references = []
+            for ref_num in references_map.keys():
+                if f"[{ref_num}]" in full_response:
+                    used_references.append(f"[{ref_num}] {references_map[ref_num]}")
+            
             # Generar y guardar el resumen de la interacción
             interaction_summary = self.generate_interaction_summary(query, full_response)
             if interaction_summary:
@@ -476,7 +377,7 @@ class ConversationalAgent:
             
             return {
                 'response': full_response,
-                'references': references,
+                'references': used_references,
                 'metrics': metrics
             }
             

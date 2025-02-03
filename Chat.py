@@ -5,6 +5,9 @@ from agents.conversational_agent import ConversationalAgent
 from agents.cag_agent import CAGAgent
 import document_db_manager as doc_db
 import json
+import os
+import re
+import base64
 
 def init_chat_state():
     if "current_conversation_id" not in st.session_state:
@@ -33,6 +36,42 @@ def init_chat_state():
 def format_time(timestamp):
     dt = datetime.strptime(timestamp[:16], '%Y-%m-%d %H:%M')
     return dt.strftime('%d %b, %H:%M')
+
+def create_download_link(db_name, filename):
+    """Crea un enlace de descarga para un documento"""
+    # Construir la ruta completa al archivo
+    file_path = os.path.join('documents', db_name, filename)
+    if os.path.exists(file_path):
+        with open(file_path, 'rb') as f:
+            file_content = f.read()
+        return file_content
+    return None
+
+def format_reference_with_download(reference, db_name):
+    """Formatea una referencia con un enlace de descarga si el archivo existe"""
+    # Extraer el nombre del archivo de la referencia
+    filename = reference.split(" - ")[0] if " - " in reference else reference
+    filename = filename.strip()  # Eliminar espacios en blanco
+    
+    # Eliminar el [X] del nombre del archivo si existe
+    filename = re.sub(r'\[\d+\]\s*', '', filename).strip()
+    
+    file_content = create_download_link(db_name, filename)
+    if file_content:
+        # Convertir el contenido del archivo a base64 para usarlo en el href
+        b64_content = base64.b64encode(file_content).decode()
+        
+        # Crear el enlace HTML con el estilo de texto normal
+        html = f"""
+        <a href="data:application/octet-stream;base64,{b64_content}" 
+           download="{filename}" 
+           style="color: inherit; text-decoration: none; cursor: pointer;">
+            {reference}
+        </a>
+        """
+        st.markdown(html, unsafe_allow_html=True)
+    else:
+        st.markdown(f"{reference} (Archivo no encontrado)")
 
 def main():
     st.set_page_config(
@@ -139,7 +178,8 @@ def main():
                 if content.get("references"):
                     with st.expander("📚 Referencias utilizadas"):
                         for ref in content["references"]:
-                            st.write(ref)
+                            format_reference_with_download(ref, st.session_state.current_document_db)
+                            
                 if content.get("metrics"):
                     # Filtrar las métricas, excluyendo 'preparación'
                     filtered_metrics = {
@@ -190,7 +230,7 @@ def main():
                 if result.get('references'):
                     with st.expander("📚 Referencias utilizadas"):
                         for ref in result['references']:
-                            st.write(ref)
+                            format_reference_with_download(ref, st.session_state.current_document_db)
                 
                 # Mostrar métricas si existen
                 if result.get('metrics'):
