@@ -19,8 +19,11 @@ def init_chat_state():
             "conversational": conv_agent,
             "cag": cag_agent
         }
-    if "conversation_memory" not in st.session_state:
-        st.session_state.conversation_memory = []
+    
+    # Asegurarse de que el agente tenga el ID de conversación correcto
+    st.session_state.agents["conversational"].set_conversation_id(
+        st.session_state.current_conversation_id
+    )
 
 def format_time(timestamp):
     dt = datetime.strptime(timestamp[:16], '%Y-%m-%d %H:%M')
@@ -62,7 +65,9 @@ def main():
         # Botón de nueva conversación
         if st.button("➕ Nueva conversación", use_container_width=True):
             st.session_state.current_conversation_id = db.create_conversation()
-            st.session_state.conversation_memory = []  # Limpiar la memoria
+            st.session_state.agents["conversational"].set_conversation_id(
+                st.session_state.current_conversation_id
+            )
             st.rerun()
         
         st.divider()
@@ -79,13 +84,18 @@ def main():
                     use_container_width=True
                 ):
                     st.session_state.current_conversation_id = conv_id
+                    st.session_state.agents["conversational"].set_conversation_id(conv_id)
                     st.rerun()
             
             with col2:
                 if st.button("🗑️", key=f"delete_{conv_id}"):
                     db.delete_conversation(conv_id)
+                    db.delete_conversation_memory(conv_id)  # Eliminar también la memoria
                     if conv_id == st.session_state.current_conversation_id:
                         st.session_state.current_conversation_id = db.create_conversation()
+                        st.session_state.agents["conversational"].set_conversation_id(
+                            st.session_state.current_conversation_id
+                        )
                     st.rerun()
     
     # Área principal de chat

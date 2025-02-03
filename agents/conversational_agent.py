@@ -5,18 +5,62 @@ from utils.logger import PrettyLogger as logger
 from time import perf_counter
 import asyncio
 import json
+import db_manager as db
 
 class ConversationalAgent:
     def __init__(self, api_key: str = None):
         self.cag_agent = None
         self.client = OpenAI(api_key=api_key or st.secrets["OPENAI_API_KEY"])
         self.conversation_memory = []
-        self.personal_memory = {}  # Para guardar información personal del usuario
+        self.personal_memory = {}
+        self.current_conversation_id = None
         logger.system("ConversationalAgent inicializado")
     
     def set_cag_agent(self, cag_agent):
         """Establece la referencia al CAG Agent"""
         self.cag_agent = cag_agent
+    
+    def set_conversation_id(self, conversation_id: int):
+        """Establece el ID de conversación actual y carga la memoria"""
+        if self.current_conversation_id != conversation_id:
+            self.current_conversation_id = conversation_id
+            self.load_memories()
+    
+    def load_memories(self):
+        """Carga las memorias desde la base de datos"""
+        try:
+            # Cargar memoria personal
+            personal_memory = db.get_memory(self.current_conversation_id, 'personal')
+            self.personal_memory = json.loads(personal_memory) if personal_memory else {}
+            
+            # Cargar memoria de conversación
+            conversation_memory = db.get_memory(self.current_conversation_id, 'conversation')
+            self.conversation_memory = json.loads(conversation_memory) if conversation_memory else []
+            
+        except Exception as e:
+            logger.error(f"Error cargando memorias: {str(e)}")
+            self.personal_memory = {}
+            self.conversation_memory = []
+    
+    def save_memories(self):
+        """Guarda las memorias en la base de datos"""
+        try:
+            if self.current_conversation_id:
+                # Guardar memoria personal
+                db.save_memory(
+                    self.current_conversation_id,
+                    'personal',
+                    json.dumps(self.personal_memory)
+                )
+                
+                # Guardar memoria de conversación
+                db.save_memory(
+                    self.current_conversation_id,
+                    'conversation',
+                    json.dumps(self.conversation_memory)
+                )
+        except Exception as e:
+            logger.error(f"Error guardando memorias: {str(e)}")
     
     def generate_interaction_summary(self, query: str, response: str) -> str:
         """Genera un resumen conciso de la interacción"""
@@ -142,6 +186,9 @@ class ConversationalAgent:
                 if len(self.conversation_memory) > 5:
                     self.conversation_memory.pop(0)
             
+            # Guardar en la base de datos
+            self.save_memories()
+            
             return {
                 'response': full_response,
                 'metrics': {'total': f"{(perf_counter() - start_total):.1f}s"}
@@ -181,6 +228,9 @@ class ConversationalAgent:
             
             new_info = json.loads(completion.choices[0].message.content)
             self.personal_memory.update(new_info)
+            
+            # Guardar en la base de datos
+            self.save_memories()
             
         except Exception as e:
             logger.error(f"Error actualizando memoria personal: {str(e)}")
@@ -290,6 +340,9 @@ class ConversationalAgent:
                 # Mantener solo las últimas 5 interacciones
                 if len(self.conversation_memory) > 5:
                     self.conversation_memory.pop(0)
+            
+            # Guardar en la base de datos
+            self.save_memories()
             
             metrics['generación'] = f"{(perf_counter() - start_llm):.1f}s"
             metrics['total'] = f"{(perf_counter() - start_total):.1f}s"
