@@ -19,6 +19,8 @@ def init_chat_state():
             "conversational": conv_agent,
             "cag": cag_agent
         }
+    if "conversation_memory" not in st.session_state:
+        st.session_state.conversation_memory = []
 
 def format_time(timestamp):
     dt = datetime.strptime(timestamp[:16], '%Y-%m-%d %H:%M')
@@ -60,6 +62,7 @@ def main():
         # Botón de nueva conversación
         if st.button("➕ Nueva conversación", use_container_width=True):
             st.session_state.current_conversation_id = db.create_conversation()
+            st.session_state.conversation_memory = []  # Limpiar la memoria
             st.rerun()
         
         st.divider()
@@ -92,15 +95,35 @@ def main():
     for message in messages:
         icon = "🤖" if message["role"] == "assistant" else "👤"
         with st.chat_message(message["role"], avatar=icon):
-            # Manejar tanto mensajes antiguos (string) como nuevos (dict)
-            if isinstance(message["content"], dict):
-                st.write(message["content"]["response"])
-                if message["content"]["references"]:
+            # Manejar tanto mensajes antiguos como nuevos
+            content = message["content"]
+            if isinstance(content, str):
+                try:
+                    content = json.loads(content)
+                except json.JSONDecodeError:
+                    pass
+            
+            if isinstance(content, dict):
+                st.markdown(content["response"])
+                if content.get("references"):
                     with st.expander("📚 Referencias utilizadas"):
-                        for ref in message["content"]["references"]:
+                        for ref in content["references"]:
                             st.write(ref)
+                if content.get("metrics"):
+                    # Filtrar las métricas, excluyendo 'preparación'
+                    filtered_metrics = {
+                        k: v for k, v in content['metrics'].items() 
+                        if k != 'preparación'
+                    }
+                    metrics_text = " | ".join([
+                        f"{k}: {v}" for k, v in filtered_metrics.items()
+                    ])
+                    st.markdown(
+                        f"<div style='text-align: right; color: #666; font-size: 0.8em'>{metrics_text}</div>", 
+                        unsafe_allow_html=True
+                    )
             else:
-                st.write(message["content"])
+                st.write(content)
     
     # Campo de entrada
     if prompt := st.chat_input("Mensaje..."):
@@ -118,17 +141,43 @@ def main():
         
         with st.chat_message("assistant", avatar="🤖"):
             if isinstance(result, dict):
-                st.write(result['response'])
-                if result['references']:
+                # Asegurarse de que el resultado es un diccionario Python y no una cadena JSON
+                if isinstance(result, str):
+                    result = json.loads(result)
+                
+                # Mostrar la respuesta principal
+                st.markdown(result['response'])
+                
+                # Mostrar referencias si existen
+                if result.get('references'):
                     with st.expander("📚 Referencias utilizadas"):
                         for ref in result['references']:
                             st.write(ref)
+                
+                # Mostrar métricas si existen
+                if result.get('metrics'):
+                    # Filtrar las métricas, excluyendo 'preparación'
+                    filtered_metrics = {
+                        k: v for k, v in result['metrics'].items() 
+                        if k != 'preparación'
+                    }
+                    metrics_text = " | ".join([
+                        f"{k}: {v}" for k, v in filtered_metrics.items()
+                    ])
+                    st.markdown(
+                        f"<div style='text-align: right; color: #666; font-size: 0.8em'>{metrics_text}</div>", 
+                        unsafe_allow_html=True
+                    )
             else:
                 st.write(result)
         
-        # Guardar el mensaje completo incluyendo referencias
+        # Guardar el mensaje en la base de datos
         if isinstance(result, dict):
-            db.save_message(st.session_state.current_conversation_id, "assistant", json.dumps(result))
+            db.save_message(
+                st.session_state.current_conversation_id, 
+                "assistant", 
+                json.dumps(result)  # Convertir el diccionario a JSON string antes de guardarlo
+            )
         else:
             db.save_message(st.session_state.current_conversation_id, "assistant", result)
         

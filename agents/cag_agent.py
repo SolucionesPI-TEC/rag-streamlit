@@ -117,56 +117,73 @@ class CAGAgent:
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.1,
-                max_tokens=150  # Reducido para evitar respuestas largas
+                max_tokens=150
             )
             
             response_text = response.choices[0].message.content.strip()
             
-            # Limpieza de la respuesta
             try:
-                # Asegurar que tenemos un JSON válido
+                # Limpiar y validar la respuesta JSON
                 if not response_text.startswith('['):
                     start = response_text.find('[')
                     end = response_text.rfind(']') + 1
                     if start != -1 and end > start:
                         response_text = response_text[start:end]
                     else:
-                        raise ValueError("No se encontró un JSON válido en la respuesta")
+                        logger.error("No se encontró un JSON válido en la respuesta")
+                        return self._fallback_selection(query, descriptions)
                 
                 results = json.loads(response_text)
                 
                 # Validar la estructura
                 if not isinstance(results, list):
-                    raise ValueError("La respuesta no es una lista")
+                    logger.error("La respuesta no es una lista")
+                    return self._fallback_selection(query, descriptions)
                 
                 if not results:
-                    raise ValueError("La lista está vacía")
-                
-                if len(results) > 3:
-                    results = results[:3]  # Tomar solo los primeros 3
+                    logger.error("La lista está vacía")
+                    return self._fallback_selection(query, descriptions)
                 
                 # Procesar y validar cada resultado
                 processed_results = []
                 for result in results:
                     if not isinstance(result, dict):
                         continue
-                        
+                    
                     doc_id = str(result.get('doc_id', ''))
                     score = result.get('score', 0)
                     
                     if doc_id and doc_id in descriptions:
                         processed_results.append({
                             'doc_id': doc_id,
-                            'score': float(min(max(score, 0), 1))  # Asegurar score entre 0 y 1
+                            'score': float(min(max(score, 0), 1))
                         })
                 
+                # Ordenar por score y limitar a 3 documentos
+                processed_results.sort(key=lambda x: x['score'], reverse=True)
+                processed_results = processed_results[:3]
+                
+                # Si tenemos resultados procesados, los devolvemos
                 if processed_results:
+                    # Solo devolver un documento si tiene score muy alto (>0.9) y los demás son mucho más bajos
+                    if len(processed_results) > 1:
+                        best_score = processed_results[0]['score']
+                        second_score = processed_results[1]['score']
+                        if best_score > 0.9 and (best_score - second_score) > 0.3:
+                            processed_results = [processed_results[0]]
+                    
+                    logger.json_data('cag', processed_results)
                     return processed_results
                 
-                raise ValueError("No se encontraron documentos válidos")
+                # Si no hay resultados válidos, usamos el fallback
+                logger.error("No se encontraron documentos válidos después del procesamiento")
+                return self._fallback_selection(query, descriptions)
                 
+            except json.JSONDecodeError as e:
+                logger.error(f"Error decodificando JSON: {str(e)}")
+                return self._fallback_selection(query, descriptions)
             except Exception as e:
-                logger.error(f"Error procesando JSON: {str(e)}")
+                logger.error(f"Error procesando resultados: {str(e)}")
                 return self._fallback_selection(query, descriptions)
                 
         except Exception as e:
