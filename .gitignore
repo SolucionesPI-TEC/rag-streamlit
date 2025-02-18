@@ -2,4 +2,3 @@
 .streamlit
 __pycache__
 chat_history.db
-documents
