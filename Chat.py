@@ -214,17 +214,18 @@ def main():
             st.write(prompt)
         db.save_message(st.session_state.current_conversation_id, "user", prompt)
         
-        # Usar el agente conversacional para procesar la consulta
-        result = st.session_state.agents["conversational"].process_user_query(prompt)
-        
+        # Crear el contenedor del mensaje del asistente
         with st.chat_message("assistant", avatar="🤖"):
+            # Usar el agente conversacional para procesar la consulta
+            # El streaming se maneja dentro del agente
+            result = st.session_state.agents["conversational"].process_user_query(prompt)
+            
             if isinstance(result, dict):
                 # Asegurarse de que el resultado es un diccionario Python y no una cadena JSON
                 if isinstance(result, str):
                     result = json.loads(result)
                 
-                # Mostrar la respuesta principal
-                st.markdown(result['response'])
+                # La respuesta principal ya se mostró durante el streaming en el agente
                 
                 # Mostrar referencias si existen
                 if result.get('references'):

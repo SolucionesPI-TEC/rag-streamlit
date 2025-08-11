@@ -190,7 +190,8 @@ class ConversationalAgent:
                     full_response += chunk.choices[0].delta.content
                     placeholder.markdown(full_response + "▌")
             
-            placeholder.empty()
+            # Mostrar la respuesta final sin el cursor
+            placeholder.markdown(full_response)
             
             # Actualizar memoria personal si hay nueva información
             self.update_personal_memory(query, full_response)
@@ -320,8 +321,6 @@ class ConversationalAgent:
         try:
             # Iniciar respuesta en streaming
             start_llm = perf_counter()
-            placeholder = st.empty()
-            full_response = ""
             
             # Modificar el prompt para incluir el contexto de la conversación
             system_prompt = """Eres un asistente experto que proporciona respuestas detalladas y precisas basadas en documentos, 
@@ -345,14 +344,18 @@ class ConversationalAgent:
                 stream=True
             )
             
+            # Crear placeholder para el streaming
+            placeholder = st.empty()
+            full_response = ""
+            
             # Procesar el streaming
             for chunk in stream:
                 if chunk.choices[0].delta.content is not None:
                     full_response += chunk.choices[0].delta.content
                     placeholder.markdown(full_response + "▌")
             
-            # Limpiar el placeholder al finalizar
-            placeholder.empty()
+            # Mostrar la respuesta final sin el cursor
+            placeholder.markdown(full_response)
             
             # Después de obtener full_response, analizar qué referencias fueron usadas
             used_references = []
